@@ -18,9 +18,11 @@
 */
 package com.initialxy.cordova.themeablebrowser;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -32,7 +34,12 @@ import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.provider.Browser;
+import android.provider.MediaStore;
+import android.support.annotation.Nullable;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.FileProvider;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
@@ -49,6 +56,8 @@ import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -77,6 +86,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
+
+import cc.septnet.student.BuildConfig;
+
+import static android.app.Activity.RESULT_OK;
 
 @SuppressLint("SetJavaScriptEnabled")
 public class ThemeableBrowser extends CordovaPlugin {
@@ -558,7 +573,7 @@ public class ThemeableBrowser extends CordovaPlugin {
                 toolbar.setBackgroundColor(hexStringToColor(
                         toolbarDef != null && toolbarDef.color != null
                                 ? toolbarDef.color : "#ffffffff"));
-                toolbar.setLayoutParams(new ViewGroup.LayoutParams(
+                toolbar.setLayoutParams(new LayoutParams(
                         LayoutParams.MATCH_PARENT,
                         dpToPixels(toolbarDef != null
                                 ? toolbarDef.height : TOOLBAR_DEF_HEIGHT)));
@@ -750,14 +765,17 @@ public class ThemeableBrowser extends CordovaPlugin {
 
                 // WebView
                 inAppWebView = new WebView(cordova.getActivity());
-                final ViewGroup.LayoutParams inAppWebViewParams = features.fullscreen
+                final LayoutParams inAppWebViewParams = features.fullscreen
                         ? new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
                         : new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0);
                 if (!features.fullscreen) {
                     ((LinearLayout.LayoutParams) inAppWebViewParams).weight = 1;
                 }
                 inAppWebView.setLayoutParams(inAppWebViewParams);
-                inAppWebView.setWebChromeClient(new InAppChromeClient(thatWebView));
+
+                inAppWebView.setWebChromeClient(selectClient);
+//                inAppWebView.setWebChromeClient(new InAppChromeClient(thatWebView));
+
                 WebViewClient client = new ThemeableBrowserClient(thatWebView, new PageLoadListener() {
                     @Override
                     public void onPageFinished(String url, boolean canGoBack, boolean canGoForward) {
@@ -783,7 +801,7 @@ public class ThemeableBrowser extends CordovaPlugin {
                 settings.setJavaScriptCanOpenWindowsAutomatically(true);
                 settings.setBuiltInZoomControls(features.zoom);
                 settings.setDisplayZoomControls(false);
-                settings.setPluginState(android.webkit.WebSettings.PluginState.ON);
+                settings.setPluginState(WebSettings.PluginState.ON);
 
                 //Toggle whether this is enabled or not!
                 Bundle appSettings = cordova.getActivity().getIntent().getExtras();
@@ -1042,7 +1060,7 @@ public class ThemeableBrowser extends CordovaPlugin {
             try {
                 normalDrawable = getImage(buttonProps.image, buttonProps.wwwImage,
                         buttonProps.wwwImageDensity);
-                ViewGroup.LayoutParams params = view.getLayoutParams();
+                LayoutParams params = view.getLayoutParams();
                 params.width = normalDrawable.getIntrinsicWidth();
                 params.height = normalDrawable.getIntrinsicHeight();
             } catch (Resources.NotFoundException e) {
@@ -1181,7 +1199,7 @@ public class ThemeableBrowser extends CordovaPlugin {
 
     public static interface PageLoadListener {
         public void onPageFinished(String url, boolean canGoBack,
-                boolean canGoForward);
+                                   boolean canGoForward);
     }
 
     /**
@@ -1262,6 +1280,16 @@ public class ThemeableBrowser extends CordovaPlugin {
                 } catch (android.content.ActivityNotFoundException e) {
                     Log.e(LOG_TAG, "Error sending sms " + url + ":" + e.toString());
                 }
+            }else if(url.startsWith("weixin:")){
+                try{
+                    Intent intent = new Intent(Intent.ACTION_VIEW,Uri.parse(url));
+                    intent.setData(Uri.parse(url));
+                    cordova.getActivity().startActivity(intent);
+                    return true;
+                }catch(android.content.ActivityNotFoundException e){
+//                    LOG.e(LOG_TAG, "Error sending sms " + url + ":" + e.toString());
+                }
+
             }
             return false;
         }
@@ -1342,6 +1370,7 @@ public class ThemeableBrowser extends CordovaPlugin {
      * Like Spinner but will always trigger onItemSelected even if a selected
      * item is selected, and always ignore default selection.
      */
+    @SuppressLint("AppCompatCustomView")
     public class MenuSpinner extends Spinner {
         private OnItemSelectedListener listener;
 
@@ -1444,4 +1473,159 @@ public class ThemeableBrowser extends CordovaPlugin {
         public String staticText;
         public boolean showPageTitle;
     }
+
+
+    //******************************************** SelectFileWebChromeClient  Start ******************************************
+    private ValueCallback<Uri> mUploadCallBack;
+    private ValueCallback<Uri[]> mUploadCallBackAboveL;
+    private String mCameraFilePath;
+    private static final int REQUEST_CODE_FILE_CHOOSER = 191;
+
+
+    WebChromeClient selectClient = new InAppChromeClient(webView){
+
+        // For Android < 3.0
+        public void openFileChooser(ValueCallback<Uri> valueCallback) {
+            mUploadCallBack = valueCallback;
+            showFileChooser();
+        }
+
+        // For Android  >= 3.0
+        public void openFileChooser(ValueCallback valueCallback, String acceptType) {
+            mUploadCallBack = valueCallback;
+            showFileChooser();
+        }
+
+        //For Android  >= 4.1
+        public void openFileChooser(ValueCallback<Uri> valueCallback, String acceptType, String capture) {
+            mUploadCallBack = valueCallback;
+            showFileChooser();
+        }
+
+        // For Android >= 5.0
+        @Override
+        public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, WebChromeClient.FileChooserParams fileChooserParams) {
+            mUploadCallBackAboveL = filePathCallback;
+            showFileChooser();
+            return true;
+        }
+    };
+
+    private void checkPermission() {
+        if (Build.VERSION.SDK_INT >= 23) {
+            List<String> permissions = new ArrayList<>();
+//            if (PackageManager.PERMISSION_GRANTED != ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA)) {
+//                permissions.add(Manifest.permission.CAMERA);
+//            }
+            if (PackageManager.PERMISSION_GRANTED != ActivityCompat.checkSelfPermission(cordova.getActivity(), Manifest.permission.READ_EXTERNAL_STORAGE)) {
+                permissions.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+            }
+            if (permissions.size() != 0) {
+                ActivityCompat.requestPermissions(cordova.getActivity(), permissions.toArray(new String[0]), 100);
+            }
+        }
+    }
+
+    /**
+     * 打开选择文件/相机
+     */
+    private void showFileChooser() {
+
+//        Intent intent1 = new Intent(Intent.ACTION_PICK, null);
+//        intent1.setDataAndType(
+//                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "image/*");
+        Intent intent1 = new Intent(Intent.ACTION_GET_CONTENT);
+        intent1.addCategory(Intent.CATEGORY_OPENABLE);
+        intent1.setType("*/*");
+
+        Intent intent2 = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        mCameraFilePath = Environment.getExternalStorageDirectory().getAbsolutePath() + File.separator +
+                System.currentTimeMillis() + ".jpg";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            // android7.0注意uri的获取方式改变
+            Uri photoOutputUri = FileProvider.getUriForFile(
+                    cordova.getActivity(),
+                    BuildConfig.APPLICATION_ID + ".opener.provider",
+                    new File(mCameraFilePath));
+            intent2.putExtra(MediaStore.EXTRA_OUTPUT, photoOutputUri);
+        } else {
+            intent2.putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(new File(mCameraFilePath)));
+        }
+
+        Intent chooser = new Intent(Intent.ACTION_CHOOSER);
+        chooser.putExtra(Intent.EXTRA_TITLE, "选择文件");
+        chooser.putExtra(Intent.EXTRA_INTENT, intent1);
+//        chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{intent2});
+//        cordova.getActivity().startActivityForResult(chooser, REQUEST_CODE_FILE_CHOOSER);
+        cordova.startActivityForResult(this,chooser, REQUEST_CODE_FILE_CHOOSER);
+
+        checkPermission();
+
+    }
+
+
+
+    @Override
+    public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+//        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_CODE_FILE_CHOOSER) {
+            Uri result = data == null || resultCode != RESULT_OK ? null : data.getData();
+            if (result == null && !TextUtils.isEmpty(mCameraFilePath)) {
+                // 看是否从相机返回
+                File cameraFile = new File(mCameraFilePath);
+                if (cameraFile.exists()) {
+                    result = Uri.fromFile(cameraFile);
+                    cordova.getActivity().sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, result));
+                }
+            }
+            if (result != null) {
+                String path = SelectClientFileUtils.getPath(cordova.getActivity(), result);
+                if (!TextUtils.isEmpty(path)) {
+                    File f = new File(path);
+                    if (f.exists() && f.isFile()) {
+                        Uri newUri = Uri.fromFile(f);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            if (mUploadCallBackAboveL != null) {
+                                if (newUri != null) {
+                                    mUploadCallBackAboveL.onReceiveValue(new Uri[]{newUri});
+                                    mUploadCallBackAboveL = null;
+                                    return;
+                                }
+                            }
+                        } else if (mUploadCallBack != null) {
+                            if (newUri != null) {
+                                mUploadCallBack.onReceiveValue(newUri);
+                                mUploadCallBack = null;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            clearUploadMessage();
+            return;
+        }
+    }
+
+    /**
+     * webview没有选择文件也要传null，防止下次无法执行
+     */
+    private void clearUploadMessage() {
+        if (mUploadCallBackAboveL != null) {
+            mUploadCallBackAboveL.onReceiveValue(null);
+            mUploadCallBackAboveL = null;
+        }
+        if (mUploadCallBack != null) {
+            mUploadCallBack.onReceiveValue(null);
+            mUploadCallBack = null;
+        }
+    }
+
+
+
+    //******************************************** SelectFileWebChromeClient  End ********************************************
+
+
+
+
 }

@@ -40,6 +40,7 @@ public class InAppChromeClient extends WebChromeClient {
         super();
         this.webView = webView;
     }
+
     /**
      * Handle database quota exceeded notification.
      *

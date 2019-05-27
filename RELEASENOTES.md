@@ -18,6 +18,14 @@
 # under the License.
 #
 -->
+Release Notes By LeoZhang
+=============
+
+1.0.0
+------
+Bug fix:add input="file" 
+Features add urlScheme for weixin,alipay
+
 Release Notes
 =============
 
